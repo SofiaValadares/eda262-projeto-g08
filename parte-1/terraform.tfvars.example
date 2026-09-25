@@ -1,0 +1,31 @@
+# Copie para terraform.tfvars e ajuste se necessário.
+# NÃO commite terraform.tfvars com segredos.
+
+aws_region     = "us-east-1"
+project_prefix = "eda262-g08-"
+scenario_slug  = "varejo-ecommerce"
+
+mandatory_tags = {
+  turma   = "eda262"
+  grupo   = "g08"
+  projeto = "engenharia-de-dados"
+}
+
+trusted_table_name = "venda_varejo_trusted"
+trusted_data_key   = "varejo-ecommerce/venda_varejo_trusted.csv"
+
+# ---------------------------------------------------------------------------
+# Backend remoto (usado com terraform init -backend-config=...)
+# Após o bootstrap, inicialize com:
+#
+# terraform init \
+#   -backend-config="bucket=eda262-g08-tfstate" \
+#   -backend-config="key=parte-1/terraform.tfstate" \
+#   -backend-config="region=us-east-1" \
+#   -backend-config="dynamodb_table=eda262-g08-tfstate-lock" \
+#   -backend-config="encrypt=true"
+#
+# Workspaces:
+#   terraform workspace new dev
+#   terraform workspace select default
+# ---------------------------------------------------------------------------
