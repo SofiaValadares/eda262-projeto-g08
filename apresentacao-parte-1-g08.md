@@ -60,10 +60,10 @@
 - **Grão:** 1 registro = 1 **item vendido** (linha de item)
 - Por quê: agregação por categoria/mês sem double-count
 - Tipagem CSV: OpenCSVSerDe + `CAST` na query (confiável no Athena)
-- Custo: **USD 5,00 / TB** varrido → dataset AV1 (preencher com o valor medido)
-- Tabela de medição em `DECISOES.md` (atualizar com QueryExecutionId real)
+- Custo: **USD 5,00 / TB**, mínimo de 10 MB → **USD 0,00004768** por consulta (3.296 B varridos)
+- Tabela de medição em `DECISOES.md` (QueryExecutionId real)
 
-> *Fala (≈60s):* defender o grão; mostrar 1 número de custo medido (QueryExecutionId real).
+> *Fala (≈60s):* defender o grão; mostrar o custo medido: 3.296 B varridos, faturado o piso de 10 MB = USD 0,00004768 (ID a223ed5d…).
 
 ---
 
@@ -77,7 +77,7 @@
 | Qual o grão? | Um registro por item vendido; permite `SUM(qtd*preço)` por categoria/mês. |
 | Como as tags são garantidas? | `default_tags` no provider AWS + checagem no `verifica.sh`. |
 | O destroy deixa órfãos? | Não: `force_destroy` em buckets/workgroup; tudo criado pelo Terraform. |
-| Como mediram custo? | `DataScannedInBytes` do Athena × US$ 5/TB; script imprime MB e USD. |
+| Como mediram custo? | `DataScannedInBytes` do Athena, faturado com piso de 10 MB × US$ 5/TB = US$ 0,00004768; o script imprime bytes e USD. |
 
 > *Fala (≈60s):* cada membro ensaiar 1 resposta; fechar com “infra reproduzível e mensurável”.
 

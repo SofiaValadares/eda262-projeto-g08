@@ -76,18 +76,36 @@ Arquivo publicado no lake: `parte-1/files/venda_varejo_trusted.csv` → `s3://ed
 
 ## 4. Custo por consulta medido no Athena
 
-Fórmula oficial Athena (preço sob demanda clássico):
+Preço sob demanda do Athena: **USD 5,00 por TB** varrido, com **mínimo faturável de 10 MB (10.485.760 B) por consulta**:
 
 \[
-\text{Custo USD} = \frac{\text{Bytes varridos}}{2^{40}} \times 5{,}00
+\text{Custo USD} = \frac{\max(\text{Bytes varridos},\ 10.485.760)}{2^{40}} \times 5{,}00
 \]
 
-(USD **5,00 por TB** varrido; mínimo prático frequentemente observado em queries minúsculas.)
+### Medição real (conta do grupo, us-east-1)
 
-### Tabela de medição (PREENCHER com a saída real do verifica.sh / get-query-execution antes da entrega)
+| Campo | Valor |
+|-------|-------|
+| Data | 2026-10-04 |
+| QueryExecutionId | `a223ed5d-6f7d-4b31-91f9-32dcb48e2378` |
+| Workgroup | `eda262-g08-workgroup` |
+| Bytes varridos | **3.296 B** (≈ 0,0031 MB — o CSV trusted inteiro) |
+| Bytes faturados | 10.485.760 B (piso de 10 MB) |
+| **Custo por consulta** | **USD 0,00004768** |
+| Tempo de execução | 516 ms |
+| Evidência | `verifica.sh` 11/11 PASSA · `verificacao/RELATORIO-VALIDACAO.md` |
 
-| Data | QueryExecutionId | Workgroup | Bytes varridos | MB varridos | Custo estimado (USD) | Observação |
-|------|------------------|-----------|----------------|-------------|----------------------|------------|
+O dataset (88 linhas, ~3 KB) fica abaixo do piso, então o custo é sempre o mínimo: **USD 0,00004768** por execução. O valor pedagógico está em medir e registrar. O `verifica.sh` aplica a mesma fórmula e imprime esse valor.
+
+### Como reproduzir
+
+```bash
+./verificacao/verifica.sh us-east-1      # imprime bytes varridos, faturados e USD
+# ou manualmente:
+aws athena get-query-execution   --query-execution-id <ID>   --query 'QueryExecution.Statistics.DataScannedInBytes'
+```
+
+------|------------------|-----------|----------------|-------------|----------------------|------------|
 | 2026-10-04 | `a223ed5d-6f7d-4b31-91f9-32dcb48e2378` | `eda262-g08-workgroup` | 3.296 | 0,0031 | 0,00004768 (piso de 10 MB; fórmula do script: 0,000000015) | `verifica.sh` 11/11 PASSA; 516 ms |
 
 

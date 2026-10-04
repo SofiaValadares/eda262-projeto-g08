@@ -205,8 +205,10 @@ else
       --query 'QueryExecution.Statistics.DataScannedInBytes' \
       --output text)
     MB=$(python3 -c "print(round(int('${DATA_SCANNED}')/1048576, 6))")
-    COST=$(python3 -c "print(round((int('${DATA_SCANNED}')/1099511627776)*5.0, 10))")
-    info "Bytes varridos: ${DATA_SCANNED} (~${MB} MB) | Custo estimado: USD ${COST}"
+    # Athena fatura no mínimo 10 MB (10485760 B) por consulta, a USD 5,00/TB
+    BILLED=$(python3 -c "print(max(int('${DATA_SCANNED}'), 10485760))")
+    COST=$(python3 -c "print(f'{(${BILLED}/1099511627776)*5.0:.8f}')")
+    info "Bytes varridos: ${DATA_SCANNED} (~${MB} MB) | Bytes faturados: ${BILLED} | Custo: USD ${COST}"
     echo ""
     info "Amostra do resultado (até 20 linhas):"
     aws athena get-query-results \
