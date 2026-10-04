@@ -7,6 +7,7 @@
 set -euo pipefail
 
 REGION="${1:-${AWS_DEFAULT_REGION:-us-east-1}}"
+MODE="${2:-}"
 PREFIX="eda262-g08-"
 BUCKET_TRUSTED="${PREFIX}lake-trusted"
 BUCKET_RESULTS="${PREFIX}athena-results"
@@ -79,6 +80,20 @@ fi
 
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text --region "$REGION")
 info "Conta AWS: ${ACCOUNT_ID} | Região: ${REGION} | Prefixo: ${PREFIX}"
+
+# Modo --destroyed: confirma que o destroy não deixou recurso órfão do grupo
+if [[ "$MODE" == "--destroyed" ]]; then
+  header "Destroy limpo (nenhum recurso eda262-g08-)"
+  LEFT=$(aws resourcegroupstaggingapi get-resources --region "$REGION"     --tag-filters Key=grupo,Values=g08 Key=turma,Values=eda262     --query 'length(ResourceTagMappingList)' --output text)
+  [[ "$LEFT" == "0" ]] && pass "Nenhum recurso com tags grupo=g08/turma=eda262" || fail "${LEFT} recurso(s) ainda existem com as tags do grupo"
+  for b in "${BUCKET_TRUSTED}" "${BUCKET_RESULTS}"; do
+    aws s3api head-bucket --bucket "$b" --region "$REGION" 2>/dev/null && fail "Bucket ainda existe: $b" || pass "Bucket removido: $b"
+  done
+  aws athena get-work-group --work-group "$WORKGROUP" --region "$REGION" >/dev/null 2>&1 && fail "Workgroup ainda existe" || pass "Workgroup removido"
+  aws glue get-database --name "$GLUE_DB" --region "$REGION" >/dev/null 2>&1 && fail "Glue database ainda existe" || pass "Glue database removido"
+  echo -e "PASSA: ${PASSA} | FALHA: ${FALHA}"
+  [[ "$FALHA" -gt 0 ]] && exit 1 || exit 0
+fi
 
 # =============================================================================
 header "1) Existência dos recursos com prefixo ${PREFIX}"

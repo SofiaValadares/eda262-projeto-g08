@@ -41,10 +41,11 @@ eda262-projeto-g08/
 └── parte-1/
     ├── bootstrap/          # S3 tfstate + DynamoDB lock
     ├── files/venda_varejo_trusted.csv
+    ├── modules/lake/       # módulo com bucket, workgroup e catálogo Glue
     ├── backend.tf
     ├── providers.tf
     ├── variables.tf
-    ├── main.tf
+    ├── main.tf             # instancia o módulo lake
     ├── outputs.tf
     └── terraform.tfvars.example
 ```
@@ -78,8 +79,9 @@ terraform init \
   -backend-config="dynamodb_table=eda262-g08-tfstate-lock" \
   -backend-config="encrypt=true"
 
-# Workspaces (opcional, mas suportado)
-terraform workspace new av1 || terraform workspace select av1
+# Workspaces: para a avaliação use o workspace "default" (nomes canônicos que o verifica.sh espera).
+# Outros workspaces (ex.: terraform workspace new dev) criam recursos com sufixo "-dev".
+terraform workspace show
 
 terraform plan
 terraform apply -auto-approve
@@ -138,6 +140,12 @@ Garantias anti-órfão:
 - `force_destroy = true` no Athena Workgroup
 - Lifecycle de 7 dias nos resultados Athena
 - Nenhum recurso fora do Terraform (sem crawler manual)
+
+## Verificar destroy limpo
+
+```bash
+./verificacao/verifica.sh us-east-1 --destroyed   # PASSA se nenhum recurso do g08 sobrou
+```
 
 ## Tag Git de entrega
 

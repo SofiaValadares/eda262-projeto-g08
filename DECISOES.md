@@ -42,7 +42,7 @@ O schema físico no Glue usa `string` em todas as colunas por restrição do **O
 
 ## 2. Tratamento da sujeira (raw → trusted)
 
-Dataset raw: `data/venda_varejo_raw.csv` (~100 linhas, com sujeiras propositalmente).
+Dataset raw: `data/venda_varejo_raw.csv` (100 linhas, com sujeiras propositalmente).
 
 | Sujeira | Tratamento na trusted |
 |---------|------------------------|
@@ -53,6 +53,8 @@ Dataset raw: `data/venda_varejo_raw.csv` (~100 linhas, com sujeiras propositalme
 
 Arquivo publicado no lake: `parte-1/files/venda_varejo_trusted.csv` → `s3://eda262-g08-lake-trusted/varejo-ecommerce/`.
 
+> O trusted (88 linhas) foi derivado do raw aplicando as 4 regras acima uma única vez, fora do Terraform, e versionado no repo.
+>
 > Na AV1 o foco é **schema declarado + consulta**. A transformação raw→trusted está materializada no artefato trusted versionado no repositório (reprodutível), sem Glue Crawler e sem job ETL pesado.
 
 ---
@@ -65,7 +67,9 @@ Arquivo publicado no lake: `parte-1/files/venda_varejo_trusted.csv` → `s3://ed
 | `default_tags` no provider AWS | Garante as 3 tags em todos os recursos sem repetição |
 | Bucket separado de resultados Athena | Isola dados do lake vs. artefatos efêmeros de query |
 | `force_destroy` em S3 e Workgroup | `terraform destroy` limpa 100% sem órfãos |
-| Backend S3 + DynamoDB (bootstrap) | State remoto + lock; suporte a workspaces |
+| Stack em módulo (`parte-1/modules/lake`) chamado pelo root | Requisito de empacotamento; root só instancia o módulo |
+| Backend S3 + DynamoDB (bootstrap) | State remoto + lock; state isolado por workspace |
+| Workspace `default` = nomes canônicos; outros ganham sufixo `-<workspace>` | Evita colisão de nomes globais (S3/Athena/Glue) entre workspaces |
 | Sem crawler / sem recursos manuais | Tudo versionado; destroy previsível |
 
 ---
@@ -80,14 +84,12 @@ Fórmula oficial Athena (preço sob demanda clássico):
 
 (USD **5,00 por TB** varrido; mínimo prático frequentemente observado em queries minúsculas.)
 
-### Tabela de medição (preencher/atualizar após execução real)
+### Tabela de medição (PREENCHER com a saída real do verifica.sh / get-query-execution antes da entrega)
 
 | Data | QueryExecutionId | Workgroup | Bytes varridos | MB varridos | Custo estimado (USD) | Observação |
 |------|------------------|-----------|----------------|-------------|----------------------|------------|
 | _a preencher_ | _a preencher_ | `eda262-g08-workgroup` | _CLI_ | _CLI_ | _fórmula_ | Rodar `verifica.sh` ou Console |
-| 2026-03-25* | *(simulado)* | `eda262-g08-workgroup` | 12 288 | ≈ 0,0117 | ≈ 0,00000006 | CSV trusted ~88 linhas; volume típico de dataset AV1 |
 
-\*Linha simulada com volume realista para o dataset do repositório (~poucos KB no S3; Athena reporta bytes efetivamente lidos). **Substituir** pelos valores do `get-query-execution` após o deploy na conta do grupo.
 
 ### Como atualizar os números reais
 
@@ -99,7 +101,6 @@ aws athena get-query-execution \
   --query 'QueryExecution.Statistics.DataScannedInBytes'
 ```
 
-Custo simulado realista para esta AV1: **≪ USD 0,01** por execução (dataset de laboratório). O valor pedagógico está em **medir e registrar**, não no montante absoluto.
 
 ---
 

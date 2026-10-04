@@ -60,10 +60,10 @@
 - **Grão:** 1 registro = 1 **item vendido** (linha de item)
 - Por quê: agregação por categoria/mês sem double-count
 - Tipagem CSV: OpenCSVSerDe + `CAST` na query (confiável no Athena)
-- Custo: **USD 5,00 / TB** varrido → dataset AV1 ≪ US$ 0,01
+- Custo: **USD 5,00 / TB** varrido → dataset AV1 (preencher com o valor medido)
 - Tabela de medição em `DECISOES.md` (atualizar com QueryExecutionId real)
 
-> *Fala (≈60s):* defender o grão; mostrar 1 número de custo medido/simulado.
+> *Fala (≈60s):* defender o grão; mostrar 1 número de custo medido (QueryExecutionId real).
 
 ---
 
