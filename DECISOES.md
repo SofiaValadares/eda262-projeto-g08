@@ -88,7 +88,7 @@ Fórmula oficial Athena (preço sob demanda clássico):
 
 | Data | QueryExecutionId | Workgroup | Bytes varridos | MB varridos | Custo estimado (USD) | Observação |
 |------|------------------|-----------|----------------|-------------|----------------------|------------|
-| _a preencher_ | _a preencher_ | `eda262-g08-workgroup` | _CLI_ | _CLI_ | _fórmula_ | Rodar `verifica.sh` ou Console |
+| 2026-10-04 | `a223ed5d-6f7d-4b31-91f9-32dcb48e2378` | `eda262-g08-workgroup` | 3.296 | 0,0031 | 0,00004768 (piso de 10 MB; fórmula do script: 0,000000015) | `verifica.sh` 11/11 PASSA; 516 ms |
 
 
 ### Como atualizar os números reais
