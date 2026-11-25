@@ -1,243 +1,249 @@
 #!/usr/bin/env bash
 # =============================================================================
-# verifica.sh — Script de aceite AV1 (Grupo g08 / eda262)
-# Executar na conta AWS do avaliador (credenciais configuradas).
-# Uso: ./verificacao/verifica.sh [regiao]
+# verifica.sh — Script de aceite da Parte 2 (AV2) · Grupo g08 / eda262
+#
+# Uso:
+#   ./verificacao/verifica.sh [regiao]               # aceite completo (~4 min; roda 1 backfill no Glue)
+#   ./verificacao/verifica.sh [regiao] --rapido      # pula o teste ao vivo de backfill/idempotência
+#   ./verificacao/verifica.sh [regiao] --destroyed   # confirma destroy sem órfãos
+#
+# Pré-requisitos: terraform apply (parte-2) + ./parte-2/ingestao/pipeline.sh carga
+# Requer: aws CLI v2, python3, credenciais da conta que fez o apply.
+#
+# Critérios (seção 4.2 do guia):
+#   1. Recursos, nomes e ausência de crawler         4. Lake Formation: permissão por camada
+#   2. Tags obrigatórias                             5. Ingestão idempotente + backfill
+#   3. Trusted/refined em Parquet particionado       6. Pergunta respondida + meta de custo
 # =============================================================================
-set -euo pipefail
+set -uo pipefail
 
 REGION="${1:-${AWS_DEFAULT_REGION:-us-east-1}}"
 MODE="${2:-}"
-PREFIX="eda262-g08-"
-BUCKET_TRUSTED="${PREFIX}lake-trusted"
-BUCKET_RESULTS="${PREFIX}athena-results"
-WORKGROUP="${PREFIX}workgroup"
-GLUE_DB="${PREFIX}catalog"
-GLUE_TABLE="venda_varejo_trusted"
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-QUERY_FILE="${REPO_ROOT}/queries/consulta_analitica.sql"
+source "${SCRIPT_DIR}/_lib.sh"
 
-RED='\033[1;31m'
-GREEN='\033[1;32m'
-YELLOW='\033[1;33m'
-CYAN='\033[1;36m'
-NC='\033[0m'
+# META DE CUSTO (DECISOES.md §5): a pergunta de negócio não pode passar do piso
+# faturável do Athena (10 MiB => USD 0,0000477 por execução).
+META_BYTES=10485760
+MES_TESTE="2025-06"      # recorte mensal usado na meta da trusted
+PARTICAO_BACKFILL="2024-01"
+N_PARTICOES_ESPERADAS=24
 
-PASSA=0
-FALHA=0
+PASSA=0; FALHA=0
+pass() { echo -e "${GREEN}[PASSA]${NC} $1"; PASSA=$((PASSA + 1)); }
+fail() { echo -e "${RED}[FALHA]${NC} $1"; FALHA=$((FALHA + 1)); }
+check() { if eval "$2" >/dev/null 2>&1; then pass "$1"; else fail "$1"; fi; }
 
-pass()  { echo -e "${GREEN}[PASSA]${NC} $1"; PASSA=$((PASSA + 1)); }
-fail()  { echo -e "${RED}[FALHA]${NC} $1"; FALHA=$((FALHA + 1)); }
-info()  { echo -e "${CYAN}==>${NC} $1"; }
-header() {
-  echo ""
-  echo -e "${YELLOW}------------------------------------------------------------${NC}"
-  echo -e "${YELLOW}$1${NC}"
-  echo -e "${YELLOW}------------------------------------------------------------${NC}"
-}
-
-check_cmd() {
-  if ! command -v "$1" >/dev/null 2>&1; then
-    echo -e "${RED}Erro: comando '$1' não encontrado.${NC}"
-    exit 1
-  fi
-}
-
-# Valida turma/grupo/projeto em um mapa JSON de tags { "Key": "...", "Value": "..." }[]
-# ou formato Glue get-tags: { "Tags": { "k": "v" } }
-# ou Resource Groups: ResourceTagMappingList
 has_mandatory_tags() {
-  python3 -c '
+  "$PY" -c '
 import json, sys
 required = {"turma": "eda262", "grupo": "g08", "projeto": "engenharia-de-dados"}
-raw = sys.stdin.read().strip() or "{}"
-data = json.loads(raw)
-tags = {}
-if "TagSet" in data:
-    tags = {t["Key"]: t["Value"] for t in data.get("TagSet") or []}
-elif "Tags" in data and isinstance(data["Tags"], dict):
-    tags = data["Tags"]
-elif "Tags" in data and isinstance(data["Tags"], list):
-    tags = {t["Key"]: t["Value"] for t in data["Tags"]}
-elif "ResourceTagMappingList" in data:
-    maps = data.get("ResourceTagMappingList") or []
-    if maps:
-        tags = {t["Key"]: t["Value"] for t in maps[0].get("Tags") or []}
-ok = all(tags.get(k) == v for k, v in required.items())
-sys.exit(0 if ok else 1)
+data = json.loads(sys.stdin.read().strip() or "{}")
+t = data.get("TagSet") or data.get("Tags") or {}
+tags = {x["Key"]: x["Value"] for x in t} if isinstance(t, list) else t
+sys.exit(0 if all(tags.get(k) == v for k, v in required.items()) else 1)
 '
 }
 
 check_cmd aws
-check_cmd python3
+[[ -n "$PY" ]] || { echo "python3 não encontrado"; exit 1; }
+ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text --region "$REGION") || exit 1
+info "Conta: ${ACCOUNT_ID} | Região: ${REGION} | Prefixo: ${PREFIX}"
+ARN_GLUE="arn:aws:glue:${REGION}:${ACCOUNT_ID}"
 
-if [[ ! -f "$QUERY_FILE" ]]; then
-  echo -e "${RED}Arquivo de query não encontrado: ${QUERY_FILE}${NC}"
-  exit 1
-fi
-
-ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text --region "$REGION")
-info "Conta AWS: ${ACCOUNT_ID} | Região: ${REGION} | Prefixo: ${PREFIX}"
-
-# Modo --destroyed: confirma que o destroy não deixou recurso órfão do grupo
+# =============================================================================
 if [[ "$MODE" == "--destroyed" ]]; then
-  header "Destroy limpo (nenhum recurso eda262-g08-)"
-  LEFT=$(aws resourcegroupstaggingapi get-resources --region "$REGION"     --tag-filters Key=grupo,Values=g08 Key=turma,Values=eda262     --query 'length(ResourceTagMappingList)' --output text)
-  [[ "$LEFT" == "0" ]] && pass "Nenhum recurso com tags grupo=g08/turma=eda262" || fail "${LEFT} recurso(s) ainda existem com as tags do grupo"
-  for b in "${BUCKET_TRUSTED}" "${BUCKET_RESULTS}"; do
-    aws s3api head-bucket --bucket "$b" --region "$REGION" 2>/dev/null && fail "Bucket ainda existe: $b" || pass "Bucket removido: $b"
+  header "Destroy limpo — nenhum recurso do g08 pode sobrar"
+  LEFT=$(aws resourcegroupstaggingapi get-resources --region "$REGION" \
+    --tag-filters Key=grupo,Values=g08 Key=turma,Values=eda262 --query 'ResourceTagMappingList[].ResourceARN' --output text)
+  [[ -z "$LEFT" || "$LEFT" == "None" ]] && pass "Nenhum recurso com tags grupo=g08/turma=eda262" || fail "Ainda existem: ${LEFT}"
+  for b in "$BUCKET_RAW" "$BUCKET_TRUSTED" "$BUCKET_REFINED" "$BUCKET_RESULTS" "$BUCKET_ARTEFATOS"; do
+    aws s3api head-bucket --bucket "$b" --region "$REGION" >/dev/null 2>&1 && fail "Bucket ainda existe: $b" || pass "Bucket removido: $b"
+  done
+  for db in "$DB_RAW" "$DB_TRUSTED" "$DB_REFINED"; do
+    aws glue get-database --name "$db" --region "$REGION" >/dev/null 2>&1 && fail "Database ainda existe: $db" || pass "Database removido: $db"
   done
   aws athena get-work-group --work-group "$WORKGROUP" --region "$REGION" >/dev/null 2>&1 && fail "Workgroup ainda existe" || pass "Workgroup removido"
-  aws glue get-database --name "$GLUE_DB" --region "$REGION" >/dev/null 2>&1 && fail "Glue database ainda existe" || pass "Glue database removido"
-  echo -e "PASSA: ${PASSA} | FALHA: ${FALHA}"
+  aws glue get-job --job-name "$GLUE_JOB" --region "$REGION" >/dev/null 2>&1 && fail "Glue job ainda existe" || pass "Glue job removido"
+  for r in "$ROLE_ANALISTA" "$ROLE_ENGENHEIRO" "$ROLE_GLUE" "$ROLE_LF"; do
+    aws iam get-role --role-name "$r" >/dev/null 2>&1 && fail "Role ainda existe: $r" || pass "Role removida: $r"
+  done
+  REG=$(aws lakeformation list-resources --region "$REGION" --query "ResourceInfoList[?contains(ResourceArn, '${PREFIX}lake-')].ResourceArn" --output text)
+  [[ -z "$REG" || "$REG" == "None" ]] && pass "Nenhuma localização ${PREFIX}lake-* registrada no Lake Formation" || fail "Ainda registradas: $REG"
+  LG=$(aws logs describe-log-groups --region "$REGION" --log-group-name-prefix "$LOG_GROUP" --query 'length(logGroups)' --output text)
+  [[ "$LG" == "0" ]] && pass "Log group removido: ${LOG_GROUP}" || fail "Log group ainda existe: ${LOG_GROUP}"
+  echo ""; echo -e "PASSA: ${PASSA} | FALHA: ${FALHA}"
   [[ "$FALHA" -gt 0 ]] && exit 1 || exit 0
 fi
 
 # =============================================================================
-header "1) Existência dos recursos com prefixo ${PREFIX}"
+header "1) Recursos com prefixo ${PREFIX} (Terraform, sem crawler)"
 # =============================================================================
-
-if aws s3api head-bucket --bucket "$BUCKET_TRUSTED" --region "$REGION" 2>/dev/null; then
-  pass "Bucket S3 trusted existe: s3://${BUCKET_TRUSTED}"
-else
-  fail "Bucket S3 trusted NÃO encontrado: s3://${BUCKET_TRUSTED}"
-fi
-
-if aws s3api head-bucket --bucket "$BUCKET_RESULTS" --region "$REGION" 2>/dev/null; then
-  pass "Bucket S3 resultados Athena existe: s3://${BUCKET_RESULTS}"
-else
-  fail "Bucket S3 resultados Athena NÃO encontrado: s3://${BUCKET_RESULTS}"
-fi
-
-if aws athena get-work-group --work-group "$WORKGROUP" --region "$REGION" >/dev/null 2>&1; then
-  pass "Athena Workgroup existe: ${WORKGROUP}"
-else
-  fail "Athena Workgroup NÃO encontrado: ${WORKGROUP}"
-fi
-
-if aws glue get-database --name "$GLUE_DB" --region "$REGION" >/dev/null 2>&1; then
-  pass "Glue Database (catalog) existe: ${GLUE_DB}"
-else
-  fail "Glue Database NÃO encontrado: ${GLUE_DB}"
-fi
-
-if aws glue get-table --database-name "$GLUE_DB" --name "$GLUE_TABLE" --region "$REGION" >/dev/null 2>&1; then
-  pass "Glue Table trusted existe: ${GLUE_DB}.${GLUE_TABLE}"
-else
-  fail "Glue Table trusted NÃO encontrada: ${GLUE_DB}.${GLUE_TABLE}"
-fi
-
-CRAWLER_COUNT=$(aws glue get-crawlers --region "$REGION" \
-  --query "length(CrawlerList[?starts_with(Name, '${PREFIX}')])" --output text 2>/dev/null || echo "0")
-if [[ "$CRAWLER_COUNT" == "0" || "$CRAWLER_COUNT" == "None" ]]; then
-  pass "Nenhum Glue Crawler com prefixo ${PREFIX} (schema explícito no Terraform)"
-else
-  fail "Encontrado(s) ${CRAWLER_COUNT} Glue Crawler(s) com prefixo ${PREFIX} — proibido"
-fi
+for b in "$BUCKET_RAW" "$BUCKET_TRUSTED" "$BUCKET_REFINED" "$BUCKET_RESULTS" "$BUCKET_ARTEFATOS"; do
+  check "Bucket existe: s3://${b}" "aws s3api head-bucket --bucket '$b' --region '$REGION'"
+done
+check "Athena workgroup existe: ${WORKGROUP}" "aws athena get-work-group --work-group '$WORKGROUP' --region '$REGION'"
+CUTOFF=$(aws athena get-work-group --work-group "$WORKGROUP" --region "$REGION" --query 'WorkGroup.Configuration.BytesScannedCutoffPerQuery' --output text 2>/dev/null)
+[[ "$CUTOFF" =~ ^[0-9]+$ ]] && pass "Workgroup com guarda de custo por consulta: ${CUTOFF} bytes ($(mib "$CUTOFF") MiB)" || fail "Workgroup sem BytesScannedCutoffPerQuery"
+for pair in "$DB_RAW:$T_RAW" "$DB_TRUSTED:$T_TRUSTED" "$DB_REFINED:$T_REFINED"; do
+  db="${pair%%:*}"; t="${pair##*:}"
+  check "Database + tabela com schema declarado: ${db}.${t}" "aws glue get-table --database-name '$db' --name '$t' --region '$REGION'"
+done
+MCR=$(aws glue get-job --job-name "$GLUE_JOB" --region "$REGION" --query 'Job.ExecutionProperty.MaxConcurrentRuns' --output text 2>/dev/null)
+[[ "$MCR" == "1" ]] && pass "Glue job ${GLUE_JOB} existe (max_concurrent_runs = 1)" || fail "Glue job ${GLUE_JOB} ausente ou com concorrência != 1 (${MCR})"
+CRAWLERS=$(aws glue get-crawlers --region "$REGION" --query "length(Crawlers[?starts_with(Name, '${PREFIX}')])" --output text 2>/dev/null || echo 0)
+[[ "$CRAWLERS" == "0" ]] && pass "Nenhum Glue Crawler ${PREFIX}* (schema declarado no Terraform)" || fail "${CRAWLERS} crawler(s) ${PREFIX}*"
 
 # =============================================================================
 header "2) Tags obrigatórias (turma, grupo, projeto)"
 # =============================================================================
+for b in "$BUCKET_RAW" "$BUCKET_TRUSTED" "$BUCKET_REFINED" "$BUCKET_RESULTS" "$BUCKET_ARTEFATOS"; do
+  check "Tags no bucket ${b}" "aws s3api get-bucket-tagging --bucket '$b' --region '$REGION' | has_mandatory_tags"
+done
+check "Tags no workgroup ${WORKGROUP}" "aws athena list-tags-for-resource --resource-arn 'arn:aws:athena:${REGION}:${ACCOUNT_ID}:workgroup/${WORKGROUP}' --region '$REGION' --output json | has_mandatory_tags"
+for db in "$DB_RAW" "$DB_TRUSTED" "$DB_REFINED"; do
+  check "Tags no database ${db}" "aws glue get-tags --resource-arn '${ARN_GLUE}:database/${db}' --region '$REGION' --output json | has_mandatory_tags"
+done
+check "Tags no Glue job ${GLUE_JOB}" "aws glue get-tags --resource-arn '${ARN_GLUE}:job/${GLUE_JOB}' --region '$REGION' --output json | has_mandatory_tags"
+for r in "$ROLE_ANALISTA" "$ROLE_ENGENHEIRO" "$ROLE_GLUE" "$ROLE_LF"; do
+  check "Tags na role IAM ${r}" "aws iam list-role-tags --role-name '$r' --output json | has_mandatory_tags"
+done
 
-if aws s3api get-bucket-tagging --bucket "$BUCKET_TRUSTED" --region "$REGION" 2>/dev/null | has_mandatory_tags; then
-  pass "Tags obrigatórias presentes no bucket ${BUCKET_TRUSTED}"
-else
-  fail "Tags obrigatórias AUSENTES ou incorretas no bucket ${BUCKET_TRUSTED}"
-fi
+# =============================================================================
+header "3) Trusted e refined em Parquet particionado"
+# =============================================================================
+for pair in "$DB_TRUSTED:$T_TRUSTED:$BUCKET_TRUSTED:vendas" "$DB_REFINED:$T_REFINED:$BUCKET_REFINED:faturamento_categoria_mes"; do
+  IFS=: read -r db t bucket pfx <<< "$pair"
+  TJSON=$(aws glue get-table --database-name "$db" --name "$t" --region "$REGION" --output json 2>/dev/null || echo '{}')
+  echo "$TJSON" | "$PY" -c "
+import json,sys
+t=json.load(sys.stdin)['Table']; sd=t['StorageDescriptor']
+ok = 'parquet' in sd['SerdeInfo']['SerializationLibrary'].lower() and [k['Name'] for k in t.get('PartitionKeys',[])]==['ano_mes']
+sys.exit(0 if ok else 1)" 2>/dev/null \
+    && pass "${db}.${t}: SerDe Parquet + chave de partição ano_mes" \
+    || fail "${db}.${t}: não é Parquet particionado por ano_mes"
+  LIST=$(aws s3 ls "s3://${bucket}/${SCENARIO}/${pfx}/" --recursive --region "$REGION" 2>/dev/null)
+  NPART=$(echo "$LIST" | grep -o 'ano_mes=[0-9-]*' | sort -u | wc -l | tr -d ' ')
+  NFILES=$(echo "$LIST" | grep -c 'ano_mes=' || true)
+  NPARQ=$(echo "$LIST" | grep 'ano_mes=' | grep -c '\.parquet$' || true)
+  [[ "$NPART" -ge "$N_PARTICOES_ESPERADAS" ]] && pass "s3://${bucket}: ${NPART} partições ano_mes=* (esperado >= ${N_PARTICOES_ESPERADAS})" \
+    || fail "s3://${bucket}: ${NPART} partições (rode ./parte-2/ingestao/pipeline.sh carga)"
+  [[ "$NFILES" -gt 0 && "$NFILES" == "$NPARQ" ]] && pass "s3://${bucket}: ${NPARQ}/${NFILES} arquivos de dados são .parquet" \
+    || fail "s3://${bucket}: ${NPARQ}/${NFILES} arquivos .parquet"
+done
 
-if aws s3api get-bucket-tagging --bucket "$BUCKET_RESULTS" --region "$REGION" 2>/dev/null | has_mandatory_tags; then
-  pass "Tags obrigatórias presentes no bucket ${BUCKET_RESULTS}"
-else
-  fail "Tags obrigatórias AUSENTES ou incorretas no bucket ${BUCKET_RESULTS}"
-fi
+# =============================================================================
+header "4) Lake Formation — permissão por camada"
+# =============================================================================
+REGS=$(aws lakeformation list-resources --region "$REGION" --query 'ResourceInfoList[].ResourceArn' --output text 2>/dev/null)
+for b in "$BUCKET_RAW" "$BUCKET_TRUSTED" "$BUCKET_REFINED"; do
+  [[ "$REGS" == *"arn:aws:s3:::${b}"* ]] && pass "Localização registrada no Lake Formation: s3://${b}" || fail "s3://${b} não registrado no Lake Formation"
+done
+for pair in "$DB_RAW:$T_RAW" "$DB_TRUSTED:$T_TRUSTED" "$DB_REFINED:$T_REFINED"; do
+  db="${pair%%:*}"; t="${pair##*:}"
+  N=$(aws lakeformation list-permissions --region "$REGION" --principal DataLakePrincipalIdentifier=IAM_ALLOWED_PRINCIPALS \
+      --resource "{\"Table\":{\"DatabaseName\":\"${db}\",\"Name\":\"${t}\"}}" --query 'length(PrincipalResourcePermissions)' --output text 2>/dev/null || echo "?")
+  [[ "$N" == "0" ]] && pass "${db}.${t}: sem IAM_ALLOWED_PRINCIPALS (acesso decidido pelo Lake Formation)" \
+    || fail "${db}.${t}: IAM_ALLOWED_PRINCIPALS ainda tem ${N} permissão(ões)"
+done
 
-WG_ARN="arn:aws:athena:${REGION}:${ACCOUNT_ID}:workgroup/${WORKGROUP}"
-if aws athena list-tags-for-resource --resource-arn "$WG_ARN" --region "$REGION" --output json 2>/dev/null | has_mandatory_tags; then
-  pass "Tags obrigatórias presentes no workgroup ${WORKGROUP}"
+testa_acesso() { # persona camada db tabela esperado(OK|NEGADO)
+  local persona="$1" camada="$2" db="$3" t="$4" esperado="$5" got
+  if como_role "$persona" athena_exec "SELECT COUNT(*) FROM \"${db}\".\"${t}\""; then got="OK"; else got="NEGADO"; fi
+  # Sem GRANT, o Lake Formation esconde a tabela: o Athena responde TABLE_NOT_FOUND.
+  local motivo=""; [[ "$got" == "NEGADO" ]] && motivo=" — ${ATH_REASON:0:110}"
+  if [[ "$got" == "$esperado" ]]; then pass "persona ${persona##*-} lê ${camada}: ${got} (esperado ${esperado})${motivo}"
+  else fail "persona ${persona##*-} lê ${camada}: ${got} (esperado ${esperado})${motivo}"; fi
+}
+testa_acesso "$ROLE_ANALISTA"   refined "$DB_REFINED" "$T_REFINED" OK
+testa_acesso "$ROLE_ANALISTA"   trusted "$DB_TRUSTED" "$T_TRUSTED" NEGADO
+testa_acesso "$ROLE_ANALISTA"   raw     "$DB_RAW"     "$T_RAW"     NEGADO
+testa_acesso "$ROLE_ENGENHEIRO" raw     "$DB_RAW"     "$T_RAW"     OK
+testa_acesso "$ROLE_ENGENHEIRO" trusted "$DB_TRUSTED" "$T_TRUSTED" OK
+testa_acesso "$ROLE_ENGENHEIRO" refined "$DB_REFINED" "$T_REFINED" OK
+if como_role "$ROLE_ANALISTA" aws s3 ls "s3://${BUCKET_REFINED}/" --region "$REGION" >/dev/null 2>&1; then
+  fail "persona analista lê o bucket refined direto no S3 (deveria ser só via Lake Formation)"
 else
-  fail "Tags obrigatórias AUSENTES ou incorretas no workgroup ${WORKGROUP}"
-fi
-
-DB_ARN="arn:aws:glue:${REGION}:${ACCOUNT_ID}:database/${GLUE_DB}"
-if aws glue get-tags --resource-arn "$DB_ARN" --region "$REGION" --output json 2>/dev/null | has_mandatory_tags; then
-  pass "Tags obrigatórias presentes no Glue Database ${GLUE_DB}"
-else
-  fail "Tags obrigatórias AUSENTES ou incorretas no Glue Database ${GLUE_DB}"
+  pass "persona analista NÃO acessa o S3 direto: leitura só por credencial do Lake Formation"
 fi
 
 # =============================================================================
-header "3) Execução da consulta analítica no Athena"
+header "5) Ingestão idempotente + backfill"
 # =============================================================================
-
-QUERY_STRING=$(cat "$QUERY_FILE")
-EXEC_ID=$(aws athena start-query-execution \
-  --region "$REGION" \
-  --work-group "$WORKGROUP" \
-  --query-execution-context "Database=${GLUE_DB}" \
-  --query-string "$QUERY_STRING" \
-  --query QueryExecutionId \
-  --output text 2>/dev/null || true)
-
-if [[ -z "${EXEC_ID}" ]]; then
-  fail "Não foi possível iniciar a query no Athena"
+if athena_exec "SELECT COUNT(*), COUNT(DISTINCT id_venda) FROM vendas_trusted" "$DB_TRUSTED"; then
+  read -r TOT DIST < <(athena_rows)
+  [[ "$TOT" == "$DIST" && "$TOT" -gt 0 ]] && pass "trusted sem duplicata: ${TOT} linhas = ${DIST} id_venda distintos" \
+    || fail "trusted com duplicata: ${TOT} linhas vs ${DIST} id_venda distintos"
 else
-  info "QueryExecutionId: ${EXEC_ID}"
-  STATUS="RUNNING"
-  for _ in $(seq 1 60); do
-    STATUS=$(aws athena get-query-execution \
-      --region "$REGION" \
-      --query-execution-id "$EXEC_ID" \
-      --query 'QueryExecution.Status.State' \
-      --output text)
-    if [[ "$STATUS" == "SUCCEEDED" || "$STATUS" == "FAILED" || "$STATUS" == "CANCELLED" ]]; then
-      break
-    fi
-    sleep 2
-  done
+  fail "Não consegui contar a trusted: ${ATH_REASON}"
+fi
+SQL_CONS="SELECT (SELECT SUM(valor_total) FROM \"${DB_TRUSTED}\".vendas_trusted) = (SELECT SUM(faturamento_bruto) FROM \"${DB_REFINED}\".faturamento_categoria_mes)"
+athena_exec "$SQL_CONS" && [[ "$(athena_scalar)" == "true" ]] \
+  && pass "refined consistente com trusted (SUM(faturamento_bruto) = SUM(valor_total))" \
+  || fail "refined diverge da trusted"
 
-  if [[ "$STATUS" == "SUCCEEDED" ]]; then
-    pass "Consulta analítica executada com sucesso no Athena"
-    DATA_SCANNED=$(aws athena get-query-execution \
-      --region "$REGION" \
-      --query-execution-id "$EXEC_ID" \
-      --query 'QueryExecution.Statistics.DataScannedInBytes' \
-      --output text)
-    MB=$(python3 -c "print(round(int('${DATA_SCANNED}')/1048576, 6))")
-    # Athena fatura no mínimo 10 MB (10485760 B) por consulta, a USD 5,00/TB
-    BILLED=$(python3 -c "print(max(int('${DATA_SCANNED}'), 10485760))")
-    COST=$(python3 -c "print(f'{(${BILLED}/1099511627776)*5.0:.8f}')")
-    info "Bytes varridos: ${DATA_SCANNED} (~${MB} MB) | Bytes faturados: ${BILLED} | Custo: USD ${COST}"
-    echo ""
-    info "Amostra do resultado (até 20 linhas):"
-    aws athena get-query-results \
-      --region "$REGION" \
-      --query-execution-id "$EXEC_ID" \
-      --max-results 20 \
-      --output table || true
+SNAP_SQL="SELECT ano_mes, COUNT(*), COUNT(DISTINCT id_venda), CAST(MAX(processado_em) AS varchar) FROM vendas_trusted GROUP BY 1 ORDER BY 1"
+if [[ "$MODE" == "--rapido" ]]; then
+  info "--rapido: teste ao vivo de backfill/idempotência pulado (ver evidencias/parte-2/)"
+else
+  athena_exec "$SNAP_SQL" "$DB_TRUSTED" && ANTES=$(athena_rows)
+  info "Backfill ao vivo: reprocessando SÓ a partição ${PARTICAO_BACKFILL} (partição que já existe)"
+  if glue_run "$PARTICAO_BACKFILL"; then
+    pass "Job de backfill --PARTICOES=${PARTICAO_BACKFILL} SUCCEEDED (${GLUE_SECS}s)"
+    athena_exec "$SNAP_SQL" "$DB_TRUSTED" && DEPOIS=$(athena_rows)
+    RES=$(ANTES="$ANTES" DEPOIS="$DEPOIS" P="$PARTICAO_BACKFILL" "$PY" -c "
+import os
+def parse(s): return {l.split('\t')[0]: l.split('\t')[1:] for l in s.strip().splitlines()}
+a, d, p = parse(os.environ['ANTES']), parse(os.environ['DEPOIS']), os.environ['P']
+mesmas_contagens = all(a[k][:2] == d.get(k, [None, None])[:2] for k in a) and a.keys() == d.keys()
+sem_dup = all(v[0] == v[1] for v in d.values())
+alvo_mudou = a[p][2] != d[p][2]
+outras_iguais = all(a[k][2] == d[k][2] for k in a if k != p)
+tot = sum(int(v[0]) for v in d.values())
+print(int(mesmas_contagens), int(sem_dup), int(alvo_mudou), int(outras_iguais), tot, a[p][0], d[p][0], a[p][2].replace(' ','T'), d[p][2].replace(' ','T'))
+")
+    read -r R_CONT R_DUP R_ALVO R_OUTRAS R_TOT R_PA R_PD R_TA R_TD <<< "$(echo "$RES" | tr -d '\r')"
+    [[ "$R_CONT" == "1" ]] && pass "Rodar de novo não duplica: contagem de TODAS as partições igual antes/depois (total ${R_TOT}; ${PARTICAO_BACKFILL}: ${R_PA} -> ${R_PD})" \
+      || fail "Contagens mudaram depois do reprocessamento"
+    [[ "$R_DUP" == "1" ]] && pass "Depois do backfill: COUNT(*) = COUNT(DISTINCT id_venda) em todas as partições" || fail "Duplicata depois do backfill"
+    [[ "$R_ALVO" == "1" ]] && pass "Backfill reescreveu ${PARTICAO_BACKFILL}: processado_em ${R_TA} -> ${R_TD}" || fail "Partição ${PARTICAO_BACKFILL} não foi reescrita"
+    [[ "$R_OUTRAS" == "1" ]] && pass "Backfill não tocou nas outras $((N_PARTICOES_ESPERADAS - 1)) partições (processado_em inalterado)" || fail "Backfill alterou outras partições"
   else
-    REASON=$(aws athena get-query-execution \
-      --region "$REGION" \
-      --query-execution-id "$EXEC_ID" \
-      --query 'QueryExecution.Status.StateChangeReason' \
-      --output text 2>/dev/null || echo "n/a")
-    fail "Consulta Athena finalizou com status ${STATUS}: ${REASON}"
+    fail "Job de backfill falhou: ${GLUE_STATE:-} ${GLUE_ERR:-}"
   fi
+fi
+
+# =============================================================================
+header "6) Pergunta de negócio no Athena + meta de custo"
+# =============================================================================
+QUERY_FILE="${REPO_ROOT}/queries/consulta_analitica.sql"
+if athena_exec "$(cat "$QUERY_FILE")" "$DB_REFINED"; then
+  NL=$(athena_rows | wc -l | tr -d ' ')
+  pass "Pergunta respondida na refined: ${NL} linhas (categoria x mês) · QueryExecutionId ${ATH_ID}"
+  info "Bytes varridos: ${ATH_BYTES} ($(mib "$ATH_BYTES") MiB) | faturado: USD $(custo_usd "$ATH_BYTES") | ${ATH_MS} ms"
+  [[ "$ATH_BYTES" -le "$META_BYTES" ]] \
+    && pass "META DE CUSTO cumprida (refined): ${ATH_BYTES} B <= ${META_BYTES} B => USD $(custo_usd "$ATH_BYTES") (piso)" \
+    || fail "META DE CUSTO estourada (refined): ${ATH_BYTES} B > ${META_BYTES} B"
+  info "Amostra (6 primeiras linhas):"; athena_rows | head -6 | sed 's/^/    /'
+else
+  fail "Pergunta falhou na refined: ${ATH_REASON}"
+fi
+
+SQL_T="SELECT categoria_produto, SUM(valor_total), SUM(quantidade) FROM vendas_trusted WHERE ano_mes = '${MES_TESTE}' GROUP BY 1"
+if athena_exec "$SQL_T" "$DB_TRUSTED"; then
+  [[ "$ATH_BYTES" -le "$META_BYTES" ]] \
+    && pass "META DE CUSTO cumprida (trusted, 1 mês com poda de partição): ${ATH_BYTES} B ($(mib "$ATH_BYTES") MiB) <= ${META_BYTES} B" \
+    || fail "META DE CUSTO estourada (trusted, 1 mês): ${ATH_BYTES} B"
+else
+  fail "Consulta mensal na trusted falhou: ${ATH_REASON}"
 fi
 
 # =============================================================================
 header "Resumo"
 # =============================================================================
-TOTAL=$((PASSA + FALHA))
-echo -e "Critérios avaliados: ${TOTAL}"
+echo -e "Critérios avaliados: $((PASSA + FALHA))"
 echo -e "${GREEN}[PASSA]${NC}: ${PASSA}"
 echo -e "${RED}[FALHA]${NC}: ${FALHA}"
-
-if [[ "$FALHA" -gt 0 ]]; then
-  echo -e "${RED}Resultado final: FALHA${NC}"
-  exit 1
-fi
-
+if [[ "$FALHA" -gt 0 ]]; then echo -e "${RED}Resultado final: FALHA${NC}"; exit 1; fi
 echo -e "${GREEN}Resultado final: PASSA${NC}"
-exit 0

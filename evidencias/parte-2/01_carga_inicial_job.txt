@@ -1,0 +1,45 @@
+[1;36m==>[0m Glue job eda262-g08-etl-vendas | run jr_8888adebbe42b02b73c3886c237c25556ced640bb7e57867b07e027c05379b41 | --PARTICOES=todas
+..............
+[1;36m==>[0m Estado: SUCCEEDED | 138s 
+{
+  "job_run_id": "jr_8888adebbe42b02b73c3886c237c25556ced640bb7e57867b07e027c05379b41",
+  "processado_em": "2026-11-25T14:06:04+00:00",
+  "particoes_solicitadas": "todas",
+  "linhas_raw": 1223286,
+  "descartes_por_regra": {
+    "data_invalida": 2489,
+    "categoria_desconhecida": 2466,
+    "preco_invalido": 15870,
+    "quantidade_invalida": 6150
+  },
+  "linhas_validas_antes_dedup": 1196311,
+  "duplicatas_removidas": 22791,
+  "linhas_trusted_total": 1173520,
+  "linhas_escritas_nesta_execucao": 1173520,
+  "particoes_escritas": {
+    "2024-01": 41603,
+    "2024-02": 39109,
+    "2024-03": 43984,
+    "2024-04": 44016,
+    "2024-05": 48913,
+    "2024-06": 46435,
+    "2024-07": 46447,
+    "2024-08": 48898,
+    "2024-09": 46484,
+    "2024-10": 51334,
+    "2024-11": 66010,
+    "2024-12": 63557,
+    "2025-01": 41551,
+    "2025-02": 39096,
+    "2025-03": 44043,
+    "2025-04": 44001,
+    "2025-05": 48917,
+    "2025-06": 46449,
+    "2025-07": 46463,
+    "2025-08": 48936,
+    "2025-09": 46440,
+    "2025-10": 51289,
+    "2025-11": 66009,
+    "2025-12": 63536
+  }
+}

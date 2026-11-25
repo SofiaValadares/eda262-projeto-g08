@@ -1,0 +1,15 @@
+# Copie para terraform.tfvars se quiser mudar algo (os defaults já são os da entrega).
+
+aws_region      = "us-east-1"
+project_prefix  = "eda262-g08-"
+scenario_slug   = "varejo-ecommerce"
+particao_inicio = "2024-01"
+
+mandatory_tags = {
+  turma   = "eda262"
+  grupo   = "g08"
+  projeto = "engenharia-de-dados"
+}
+
+# Guarda de custo do workgroup (bytes varridos por consulta). 1 GiB.
+athena_bytes_cutoff = 1073741824

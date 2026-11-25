@@ -1,21 +1,18 @@
--- Consulta analítica (cenário varejo-ecommerce / g08)
+-- Consulta analítica — Parte 2 (cenário varejo-ecommerce / g08)
 -- Pergunta: Qual o faturamento total (receita bruta) e a quantidade total
---           de itens vendidos agrupados por categoria de produto e por mês?
+--           de itens vendidos, por categoria de produto e por mês?
 --
--- Camada: trusted (Glue: eda262-g08-catalog.venda_varejo_trusted)
--- Grão: 1 registro = 1 item vendido na transação
---
--- Tipagem: OpenCSVSerDe expõe colunas como string; CASTs explícitos abaixo.
+-- Camada:  refined  (database eda262-g08-refined, contexto da execução)
+-- Tabela:  faturamento_categoria_mes — Parquet/Snappy, particionada por ano_mes
+-- Grão:    1 registro = 1 categoria x 1 mês (já agregado pelo job a partir da trusted)
+-- Custo:   meta <= 10 MiB varridos por execução (ver DECISOES.md §5)
 
 SELECT
+  ano_mes,
   categoria_produto,
-  date_format(CAST(data_venda AS DATE), '%Y-%m') AS ano_mes,
-  SUM(CAST(quantidade AS INTEGER) * CAST(preco_unitario AS DECIMAL(10, 2))) AS faturamento_bruto,
-  SUM(CAST(quantidade AS INTEGER)) AS qtd_itens_vendidos
-FROM venda_varejo_trusted
-GROUP BY
-  categoria_produto,
-  date_format(CAST(data_venda AS DATE), '%Y-%m')
+  faturamento_bruto,
+  qtd_itens_vendidos
+FROM faturamento_categoria_mes
 ORDER BY
   ano_mes,
   categoria_produto;

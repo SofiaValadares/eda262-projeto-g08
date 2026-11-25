@@ -1,0 +1,29 @@
+[1;36m==>[0m Subindo lotes para s3://eda262-g08-lake-raw/varejo-ecommerce/vendas/
+  raw <- vendas_lote_2024-01.csv
+  raw <- vendas_lote_2024-02.csv
+  raw <- vendas_lote_2024-03.csv
+  raw <- vendas_lote_2024-04.csv
+  raw <- vendas_lote_2024-05.csv
+  raw <- vendas_lote_2024-06.csv
+  raw <- vendas_lote_2024-07.csv
+  raw <- vendas_lote_2024-08.csv
+  raw <- vendas_lote_2024-09.csv
+  raw <- vendas_lote_2024-10.csv
+  raw <- vendas_lote_2024-11.csv
+  raw <- vendas_lote_2024-12.csv
+  raw <- vendas_lote_2025-01.csv
+  raw <- vendas_lote_2025-02.csv
+  raw <- vendas_lote_2025-03.csv
+  raw <- vendas_lote_2025-04.csv
+  raw <- vendas_lote_2025-05.csv
+  raw <- vendas_lote_2025-06.csv
+  raw <- vendas_lote_2025-07.csv
+  raw <- vendas_lote_2025-08.csv
+  raw <- vendas_lote_2025-09.csv
+  raw <- vendas_lote_2025-10.csv
+  raw <- vendas_lote_2025-11.csv
+  raw <- vendas_lote_2025-12.csv
+[1;36m==>[0m Glue job eda262-g08-etl-vendas | run jr_c6bf72c66928763b876d5c9331f425fe653bab375613d3eb6a1f942a3e0ddb26 | --PARTICOES=todas
+.......
+[1;36m==>[0m Estado: FAILED | 77s ArgumentError: argument --JOB_RUN_ID: conflicting option string: --JOB_RUN_ID
+[1;31mJob falhou: ArgumentError: argument --JOB_RUN_ID: conflicting option string: --JOB_RUN_ID[0m

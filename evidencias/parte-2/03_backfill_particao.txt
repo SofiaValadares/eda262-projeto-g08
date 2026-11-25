@@ -1,0 +1,48 @@
+# Backfill: partição 2024-01 perdida na trusted e na refined, restaurada só ela
+colunas: ano_mes | linhas | SUM(valor_total) | max(processado_em)
+
+== 1) Estado inicial
+    2024-01	41603	100948656.26	2026-11-25 14:09:52.000
+    2024-02	39109	97063421.77	2026-11-25 14:09:52.000
+    2025-12	63536	156756588.21	2026-11-25 14:09:52.000
+    [query 5eedc509-3c8c-4d7d-8535-6c2c16cf5474]
+    TOTAL trusted: 1173520	2873905622.54
+    refined linhas em 2024-01: 7
+
+== 2) Simulando perda: apagando ano_mes=2024-01 da trusted e da refined
+delete: s3://eda262-g08-lake-trusted/varejo-ecommerce/vendas/ano_mes=2024-01/part-00001-5a4b9073-9008-45ca-bdcf-85b2ec3beee5.c000.snappy.parquet
+delete: s3://eda262-g08-lake-refined/varejo-ecommerce/faturamento_categoria_mes/ano_mes=2024-01/part-00000-4625459a-5a94-4780-9f63-7defdbb14c7c.c000.snappy.parquet
+    2024-02	39109	97063421.77	2026-11-25 14:09:52.000
+    2025-12	63536	156756588.21	2026-11-25 14:09:52.000
+    [query 330a1ebe-c92e-4410-a5e0-ce73443cde1c]
+    TOTAL trusted: 1131917	2772956966.28
+    refined linhas em 2024-01: 0
+
+== 3) Backfill: ./parte-2/ingestao/pipeline.sh backfill 2024-01
+[1;36m==>[0m Glue job eda262-g08-etl-vendas | run jr_abf3ce05b84261f09dfc9a08e02043c44f74ada5295aeb28755916ce05cdefd8 | --PARTICOES=2024-01
+........
+[1;36m==>[0m Estado: SUCCEEDED | 95s 
+  "particoes_solicitadas": [
+    "2024-01"
+  "linhas_escritas_nesta_execucao": 41603,
+  "particoes_escritas": {
+    "2024-01": 41603
+
+== 4) Depois do backfill
+    2024-01	41603	100948656.26	2026-11-25 14:16:47.000
+    2024-02	39109	97063421.77	2026-11-25 14:09:52.000
+    2025-12	63536	156756588.21	2026-11-25 14:09:52.000
+    [query dad6875a-639a-4c81-b377-5d225d45a3b6]
+    TOTAL trusted: 1173520	2873905622.54
+    refined linhas em 2024-01: 7
+
+== 5) Rodando o MESMO backfill de novo (idempotência do backfill)
+[1;36m==>[0m Glue job eda262-g08-etl-vendas | run jr_6685212f84bcc0b4b32dbe3c7380220fe1f3a835f82c00ee40215fa59957dc41 | --PARTICOES=2024-01
+........
+[1;36m==>[0m Estado: SUCCEEDED | 93s 
+    2024-01	41603	100948656.26	2026-11-25 14:19:30.000
+    2024-02	39109	97063421.77	2026-11-25 14:09:52.000
+    2025-12	63536	156756588.21	2026-11-25 14:09:52.000
+    [query 06b43391-bd01-4605-9fec-887dda4be5ef]
+    TOTAL trusted: 1173520	2873905622.54
+    refined linhas em 2024-01: 7

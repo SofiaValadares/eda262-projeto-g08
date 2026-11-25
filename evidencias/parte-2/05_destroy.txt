@@ -1,0 +1,28 @@
+== terraform destroy (parte-2)
+Destroy complete! Resources: 47 destroyed.
+== terraform destroy (bootstrap)
+Destroy complete! Resources: 5 destroyed.
+== verifica.sh --destroyed
+==> Conta: 325583868777 | Região: us-east-1 | Prefixo: eda262-g08-
+Destroy limpo — nenhum recurso do g08 pode sobrar
+[PASSA] Nenhum recurso com tags grupo=g08/turma=eda262
+[PASSA] Bucket removido: eda262-g08-lake-raw
+[PASSA] Bucket removido: eda262-g08-lake-trusted
+[PASSA] Bucket removido: eda262-g08-lake-refined
+[PASSA] Bucket removido: eda262-g08-athena-results
+[PASSA] Bucket removido: eda262-g08-artefatos
+[PASSA] Database removido: eda262-g08-raw
+[PASSA] Database removido: eda262-g08-trusted
+[PASSA] Database removido: eda262-g08-refined
+[PASSA] Workgroup removido
+[PASSA] Glue job removido
+[PASSA] Role removida: eda262-g08-analista
+[PASSA] Role removida: eda262-g08-engenheiro
+[PASSA] Role removida: eda262-g08-glue-etl
+[PASSA] Role removida: eda262-g08-lf-registro
+[PASSA] Nenhuma localização eda262-g08-lake-* registrada no Lake Formation
+[PASSA] Log group removido: /eda262-g08/glue/etl-vendas
+PASSA: 17 | FALHA: 0
+== backend
+tfstate removido
+lock removido

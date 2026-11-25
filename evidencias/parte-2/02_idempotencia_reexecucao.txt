@@ -1,0 +1,18 @@
+# Idempotência: o mesmo job (--PARTICOES=todas) roda 2x sobre o mesmo raw
+colunas trusted: linhas | id_venda distintos | SUM(valor_total) | partições | max(processado_em)
+colunas refined: linhas | SUM(faturamento_bruto) | SUM(qtd_itens)
+
+== ANTES (após execução 1)
+  trusted  -> 1173520	1173520	2873905622.54	24	2026-11-25 14:06:04.000   [query 91855745-ba96-42cf-8d75-cf7b0f0d1003]
+  refined  -> 168	2873905622.54	3757947   [query 9b0d31a1-7700-4dfc-b8df-09ca9e1f391f]
+  S3 trusted: 24 arquivos .parquet
+
+== Execução 2
+[1;36m==>[0m Glue job eda262-g08-etl-vendas | run jr_7f4374c9d5545f3a9b38b1ba1c35567a3aa6a192d6fba7dd775d22e7cbc69104 | --PARTICOES=todas
+.........
+[1;36m==>[0m Estado: SUCCEEDED | 108s 
+
+== DEPOIS (após execução 2)
+  trusted  -> 1173520	1173520	2873905622.54	24	2026-11-25 14:09:52.000   [query b9f78951-90d0-4f6c-8fd8-c5d2fb979c08]
+  refined  -> 168	2873905622.54	3757947   [query 336c3a60-76aa-4792-adb8-ab18b966872c]
+  S3 trusted: 24 arquivos .parquet

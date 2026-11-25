@@ -30,3 +30,6 @@
 __pycache__/
 *.pyc
 .venv/
+
+# Parte 2 — lotes raw gerados por parte-2/ingestao/gerar_raw.py (determinístico)
+parte-2/dados/
